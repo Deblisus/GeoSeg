@@ -356,19 +356,44 @@ class UNetFormer(nn.Module):
                  backbone_name='swsl_resnet18',
                  pretrained=True,
                  window_size=8,
-                 num_classes=6
+                 num_classes=6,
+                 img_size=1024,
+                 grad_checkpointing=False
                  ):
         super().__init__()
-
-        self.backbone = timm.create_model(backbone_name, features_only=True, output_stride=32,
-                                          out_indices=(1, 2, 3, 4), pretrained=pretrained)
-        encoder_channels = self.backbone.feature_info.channels()
-
-        self.decoder = Decoder(encoder_channels, decode_channels, dropout, window_size, num_classes)
-
+        if 'swin' in backbone_name:
+            self.backbone = timm.create_model(
+                backbone_name,
+                features_only=True,
+                out_indices=(0, 1, 2, 3),
+                img_size=img_size,
+                pretrained=pretrained,
+            )
+            if grad_checkpointing:
+                if hasattr(self.backbone, 'set_grad_checkpointing'):
+                    self.backbone.set_grad_checkpointing(True)
+                else:
+                    for m in self.backbone.modules():
+                        if hasattr(m, 'grad_checkpointing'):
+                            m.grad_checkpointing = True
+        else:
+            self.backbone = timm.create_model(
+                backbone_name,
+                features_only=True,
+                output_stride=32,
+                out_indices=(1, 2, 3, 4),
+                pretrained=pretrained,
+            )
+        self.encoder_channels = self.backbone.feature_info.channels()
+        self.decoder = Decoder(self.encoder_channels, decode_channels, dropout, window_size, num_classes)
     def forward(self, x):
         h, w = x.size()[-2:]
-        res1, res2, res3, res4 = self.backbone(x)
+        feats = self.backbone(x)
+        # timm==0.9.16 Swin/SwinV2 features_only outputs NHWC; convert to NCHW for the decoder
+        res1, res2, res3, res4 = [
+            f.permute(0, 3, 1, 2).contiguous() if (f.shape[1] != c and f.shape[-1] == c) else f
+            for f, c in zip(feats, self.encoder_channels)
+        ]
         if self.training:
             x, ah = self.decoder(res1, res2, res3, res4, h, w)
             return x, ah
