@@ -15,9 +15,9 @@ from .transform import *
 CLASSES = ('Clutter', 'Wall', 'Road', 'Tree', 'LowVeg', 'Water', 'Sky', 'Roof', 'StaticCar', 'DynamicCar', 'Human')
 PALETTE = [[0, 0, 0], [128, 0, 0], [128, 64, 128], [0, 128, 0], [128, 128, 0], [0, 0, 255], [128, 255, 255], [70, 70, 70], [192, 0, 192], [64, 0, 128], [64, 64, 0]]
 
-ORIGIN_IMG_SIZE = (1088, 1088)
-INPUT_IMG_SIZE = (1088, 1088)
-TEST_IMG_SIZE = (1088, 1088)
+ORIGIN_IMG_SIZE = (1024, 1024)
+INPUT_IMG_SIZE = (1024, 1024)
+TEST_IMG_SIZE = (1024, 1024)
 
 
 def get_training_transform():

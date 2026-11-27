@@ -43,10 +43,10 @@ def parse_args():
     parser.add_argument("--output-img-dir", default="data/uavidpp/train_val/images")
     parser.add_argument("--output-mask-dir", default="data/uavidpp/train_val/masks")
     parser.add_argument("--mode", type=str, default='train')
-    parser.add_argument("--split-size-h", type=int, default=1088)
-    parser.add_argument("--split-size-w", type=int, default=1088)
-    parser.add_argument("--stride-h", type=int, default=1088)
-    parser.add_argument("--stride-w", type=int, default=1088)
+    parser.add_argument("--split-size-h", type=int, default=1024)
+    parser.add_argument("--split-size-w", type=int, default=1024)
+    parser.add_argument("--stride-h", type=int, default=568)
+    parser.add_argument("--stride-w", type=int, default=1024)
     return parser.parse_args()
 
 
@@ -107,6 +107,44 @@ def image_augment(image, mask, mode='train'):
         mask_list.append(mask)
     return image_list, mask_list
 
+def padifneeded(image, mask):
+    pad = albu.PadIfNeeded(min_height=2160, min_width=4096, position='bottom_right',
+                           border_mode=0, value=[0, 0, 0], mask_value=[255, 255, 255])(image=image, mask=mask)
+    # pad = albu.PadIfNeeded(min_height=h, min_width=w)(image=image, mask=mask)
+    img_pad, mask_pad = pad['image'], pad['mask']
+    assert img_pad.shape[0] == 2048 or img_pad.shape[1] == 4096, print(img_pad.shape)
+    # print(img_pad.shape)
+    return img_pad, mask_pad
+
+def get_tile_coords(length, tile_size, stride):
+    if length <= tile_size:
+        return [0]
+    coords = list(range(0, length - tile_size + 1, stride))
+    if coords[-1] != length - tile_size:
+        coords.append(length - tile_size)
+    return coords
+
+def pad_width_to_tile_center(image, mask, split_size):
+    h, w = image.shape[:2]
+    target_h = max(h, split_size[0])
+    target_w = ((w + split_size[1] - 1) // split_size[1]) * split_size[1]
+    pad_h_total = target_h - h
+    pad_w_total = target_w - w
+    pad_top = pad_h_total // 2
+    pad_bottom = pad_h_total - pad_top
+    pad_left = pad_w_total // 2
+    pad_right = pad_w_total - pad_left
+    img_pad = cv2.copyMakeBorder(
+        image, pad_top, pad_bottom, pad_left, pad_right,
+        borderType=cv2.BORDER_CONSTANT,
+        value=(0, 0, 0)
+    )
+    mask_pad = cv2.copyMakeBorder(
+        mask, pad_top, pad_bottom, pad_left, pad_right,
+        borderType=cv2.BORDER_CONSTANT,
+        value=(255, 255, 255)
+    )
+    return img_pad, mask_pad
 
 def pad_to_tile_center(image, mask, split_size):
     h, w = image.shape[:2]
@@ -146,7 +184,9 @@ def patch_format(inp):
         id = os.path.splitext(os.path.basename(img_path))[0]
         assert img.shape == mask.shape and img.shape[0] == 2160, print(img.shape)
         assert img.shape[1] == 3840 or img.shape[1] == 4096, print(img.shape)
-        img, mask = pad_to_tile_center(img.copy(), mask.copy(), split_size)
+        # img, mask = padifneeded(img.copy(), mask.copy())
+        # img, mask = pad_to_tile_center(img.copy(), mask.copy(), split_size)
+        img, mask = pad_width_to_tile_center(img.copy(), mask.copy(), split_size)
 
         # print(img_path)
         # print(img.size, mask.size)
@@ -157,9 +197,14 @@ def patch_format(inp):
             k = 0
             img = image_list[m]
             mask = mask_list[m]
+            # img, mask = img[-2048:, -4096:, :], mask[-2048:, -4096:]
             assert img.shape[0] == mask.shape[0] and img.shape[1] == mask.shape[1]
-            for y in range(0, img.shape[0], stride[0]):
-                for x in range(0, img.shape[1], stride[1]):
+            y_coords = get_tile_coords(img.shape[0], split_size[0], stride[0])
+            x_coords = get_tile_coords(img.shape[1], split_size[1], stride[1])
+            for y in y_coords:
+                for x in x_coords:
+            # for y in range(0, img.shape[0], stride[0]):
+            #     for x in range(0, img.shape[1], stride[1]):
                     img_tile_cut = img[y:y + split_size[0], x:x + split_size[1]]
                     mask_tile_cut = mask[y:y + split_size[0], x:x + split_size[1]]
                     img_tile, mask_tile = img_tile_cut, mask_tile_cut
