@@ -39,7 +39,6 @@ resume_ckpt_path = None  # whether continue training with the checkpoint, defaul
 net = UNetFormer(
     backbone_name='swinv2_small_window8_256',
     num_classes=num_classes,
-    num_classes=num_classes,
     img_size=1024,
     grad_checkpointing=True
 )
