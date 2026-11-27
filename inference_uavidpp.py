@@ -1,3 +1,10 @@
+import collections
+import collections.abc
+collections.MutableMapping = collections.abc.MutableMapping
+collections.Iterable = collections.abc.Iterable
+collections.Sequence = collections.abc.Sequence
+collections.Mapping = collections.abc.Mapping
+
 import argparse
 from pathlib import Path
 import glob
