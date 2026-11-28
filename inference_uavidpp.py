@@ -16,6 +16,7 @@ import torch
 import albumentations as albu
 from skimage.morphology import remove_small_holes, remove_small_objects
 from tools.cfg import py2cfg
+from tools.uavidpp_patch_split import rgb2label
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
@@ -186,17 +187,24 @@ def main():
         )
         model = tta.SegmentationTTAWrapper(model, transforms)
 
-    for seq in seqs:
+    evaluator = Evaluator(num_class=config.num_classes)
+    evaluator.reset()
+    eval_count = 0
+
+    for seq in sorted(seqs):
+        seq_dir = os.path.join(args.image_path, str(seq))
+        if not os.path.isdir(seq_dir):
+            continue
         img_paths = []
         output_path = os.path.join(args.output_path, str(seq), 'Labels')
         if not os.path.exists(output_path):
             os.makedirs(output_path)
         for ext in ('*.tif', '*.png', '*.jpg'):
-            img_paths.extend(glob.glob(os.path.join(args.image_path, str(seq), 'Images', ext)))
+            img_paths.extend(glob.glob(os.path.join(seq_dir, 'Images', ext)))
         img_paths.sort()
         # print(img_paths)
         for img_path in img_paths:
-            img_name = img_path.split('/')[-1]
+            img_name = os.path.basename(img_path)
             # print('origin mask', original_mask.shape)
             dataset, width_pad, height_pad, output_width, output_height, img_pad, img_shape = \
                 make_dataset_for_one_huge_image(img_path, patch_size)
@@ -230,6 +238,14 @@ def main():
 
             output_mask = output_mask[-img_shape[0]:, -img_shape[1]:]
 
+            gt_path = os.path.join(seq_dir, 'Labels', img_name)
+            if os.path.exists(gt_path):
+                gt_img = cv2.imread(gt_path, cv2.IMREAD_COLOR)
+                gt_img = cv2.cvtColor(gt_img, cv2.COLOR_BGR2RGB)
+                gt_mask = rgb2label(gt_img)
+                evaluator.add_batch(gt_image=gt_mask, pre_image=output_mask)
+                eval_count += 1
+
             # print('mask', output_mask.shape)
             if args.dataset == 'landcoverai':
                 output_mask = landcoverai_to_rgb(output_mask)
@@ -241,6 +257,38 @@ def main():
                 output_mask = output_mask
             assert img_shape == output_mask.shape
             cv2.imwrite(os.path.join(output_path, img_name), output_mask)
+
+    if eval_count > 0:
+        iou_per_class = evaluator.Intersection_over_Union()
+        f1_per_class = evaluator.F1()
+        precision_per_class = evaluator.Precision()
+        recall_per_class = evaluator.Recall()
+        OA = evaluator.OA()
+        FWIoU = evaluator.Frequency_Weighted_Intersection_over_Union()
+        mIoU = np.nanmean(iou_per_class)
+        mF1 = np.nanmean(f1_per_class)
+        mPrecision = np.nanmean(precision_per_class)
+        mRecall = np.nanmean(recall_per_class)
+
+        lines = [f"Evaluated on {eval_count} images:"]
+        lines.append(f"{'Class':<15} {'IoU':>10} {'F1':>10} {'Precision':>10} {'Recall':>10}")
+        lines.append("-" * 59)
+        for class_name, c_iou, c_f1, c_prec, c_rec in zip(
+            config.classes, iou_per_class, f1_per_class, precision_per_class, recall_per_class
+        ):
+            lines.append(f"{class_name:<15} {c_iou:>10.4f} {c_f1:>10.4f} {c_prec:>10.4f} {c_rec:>10.4f}")
+        lines.append("-" * 59)
+        lines.append(f"{'Mean':<15} {mIoU:>10.4f} {mF1:>10.4f} {mPrecision:>10.4f} {mRecall:>10.4f}")
+        lines.append(f"mIoU: {mIoU:.4f}, mF1: {mF1:.4f}, OA: {OA:.4f}, FWIoU: {FWIoU:.4f}")
+
+        report = "\n".join(lines)
+        print("\n" + report)
+        metrics_file = os.path.join(args.output_path, "metrics.txt")
+        with open(metrics_file, "w") as f:
+            f.write(report + "\n")
+        print(f"Saved metrics to {metrics_file}")
+    else:
+        print("No ground-truth Labels found; skipped metric evaluation.")
 
 
 if __name__ == "__main__":

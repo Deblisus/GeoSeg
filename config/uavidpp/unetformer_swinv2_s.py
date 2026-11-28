@@ -24,7 +24,7 @@ classes = CLASSES
 
 weights_name = "unetformer-swinv2-small-1024-e40"
 weights_path = "model_weights/uavidpp/{}".format(weights_name)
-test_weights_name = "last"
+test_weights_name = weights_name # "last"
 log_name = 'uavidpp/{}'.format(weights_name)
 monitor = 'val_mIoU'
 monitor_mode = 'max'
