@@ -6,6 +6,8 @@ from einops import rearrange, repeat
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 import timm
 
+import re
+from geoseg.models.FTUNetFormer import SwinTransformer
 
 class ConvBNReLU(nn.Sequential):
     def __init__(self, in_channels, out_channels, kernel_size=3, dilation=1, stride=1, norm_layer=nn.BatchNorm2d, bias=False):
@@ -394,6 +396,82 @@ class UNetFormer(nn.Module):
             f.permute(0, 3, 1, 2).contiguous() if (f.shape[1] != c and f.shape[-1] == c) else f
             for f, c in zip(feats, self.encoder_channels)
         ]
+        if self.training:
+            x, ah = self.decoder(res1, res2, res3, res4, h, w)
+            return x, ah
+        else:
+            x = self.decoder(res1, res2, res3, res4, h, w)
+            return x
+
+class UNetFormerSwin(nn.Module):
+    def __init__(self,
+                 decode_channels=64,
+                 dropout=0.1,
+                 embed_dim=96,
+                 depths=(2, 2, 18, 2),
+                 num_heads=(3, 6, 12, 24),
+                 window_size=8,
+                 swin_window_size=7,
+                 drop_path_rate=0.3,
+                 frozen_stages=-1,
+                 use_checkpoint=False,
+                 pretrained=True,
+                 weight_path=None,
+                 num_classes=6
+                 ):
+        super().__init__()
+
+        self.backbone = SwinTransformer(
+            embed_dim=embed_dim,
+            depths=depths,
+            num_heads=num_heads,
+            window_size=swin_window_size,
+            drop_path_rate=drop_path_rate,
+            frozen_stages=frozen_stages,
+            use_checkpoint=use_checkpoint
+        )
+        encoder_channels = [embed_dim, embed_dim * 2, embed_dim * 4, embed_dim * 8]
+        self.decoder = Decoder(encoder_channels, decode_channels, dropout, window_size, num_classes)
+
+        if pretrained:
+            self._load_pretrained(weight_path)
+    
+    def _load_pretrained(self, weight_path=None):
+        if weight_path is not None:
+            ckpt = torch.load(weight_path, map_location='cpu')
+            if 'state_dict' in ckpt:
+                # GeoSeg's stseg_small.pth (MMSeg format: keys prefixed with 'backbone.')
+                sd = {
+                    k.replace('backbone.', '', 1): v
+                    for k, v in ckpt['state_dict'].items()
+                    if k.startswith('backbone.')
+                }
+            else:
+                # Official Microsoft swin_small_patch4_window7_224.pth
+                sd = ckpt.get('model', ckpt)
+        else:
+            # Auto-download ImageNet-1K Swin-Small from timm (no manual file needed on Colab)
+            timm_swin = timm.create_model('swin_small_patch4_window7_224', pretrained=True)
+            sd = {}
+            for k, v in timm_swin.state_dict().items():
+                # timm>=0.9 places PatchMerging at the start of stages 1..3 instead of end of stages 0..2
+                k = re.sub(
+                    r'layers\.(\d+)\.downsample',
+                    lambda m: f'layers.{int(m.group(1)) - 1}.downsample',
+                    k,
+                )
+                if k == 'norm.weight':
+                    k = 'norm3.weight'
+                elif k == 'norm.bias':
+                    k = 'norm3.bias'
+                sd[k] = v
+
+        msg = self.backbone.load_state_dict(sd, strict=False)
+        print("Loaded Swin-Small backbone:", msg)
+
+    def forward(self, x):
+        h, w = x.size()[-2:]
+        res1, res2, res3, res4 = self.backbone(x)
         if self.training:
             x, ah = self.decoder(res1, res2, res3, res4, h, w)
             return x, ah
